@@ -34,6 +34,7 @@ executables:
     dependencies:
       - Win32
       - inline-c
+      - stm
 
 tests:
   MouseSpeeed-test:
