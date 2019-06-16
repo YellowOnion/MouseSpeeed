@@ -35,6 +35,8 @@ executables:
       - Win32
       - inline-c
       - stm
+      - linear
+      - optparse-applicative
 
 tests:
   MouseSpeeed-test:

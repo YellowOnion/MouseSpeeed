@@ -14,22 +14,43 @@ import Data.Bits
 
 import System.IO
 
-import Debug.Trace
+import qualified Linear as L
 
 import Graphics.Win32.Key
 import qualified Language.C.Inline as C
+
+import Text.Printf
+import Options.Applicative
+import Data.Semigroup ((<>))
 
 
 flush = hFlush stdout
 
 C.include "windows.h"
 
+data Config = Config
+  { cDecay     :: Float
+  , cDpi       :: Int
+  , cFile      :: FilePath
+  }
 
-data RawMouse = RawMouse {
-  rmX :: Int,
-  rmY :: Int,
-  rmTime :: Int
-} deriving (Show)
+config :: Parser Config
+config = Config
+      <$> option auto
+          ( long "decay"
+          <> short 'c'
+          <> help "the amount in cm subtracted from the peak speed every tick" )
+      <*> option auto
+          ( long "dpi"
+          <> short 'd'
+          <> help "the DPI/CPI of your mouse" )
+      <*> strOption
+          ( long "output"
+          <> short 'o'
+          <> help "output file to write results to")
+
+type RawMouse = L.V2 Int
+
 
 createWindow :: Int -> Int -> Graphics.Win32.WindowClosure -> IO Graphics.Win32.HWND
 createWindow width height wndProc = do
@@ -104,7 +125,7 @@ wndProc rawChan hwnd wmsg wParam lParam
         |]
         x' <- peek x
         y' <- peek y
-        atomically $ writeTQueue rawChan $ RawMouse (fromIntegral x') (fromIntegral y') 0
+        atomically $ writeTQueue rawChan $ L.V2 (fromIntegral x') (fromIntegral y')
     return 0
 
  | otherwise = Graphics.Win32.defWindowProc (Just hwnd) wmsg wParam lParam
@@ -120,35 +141,42 @@ msgPump hwnd = Graphics.Win32.allocaMessage $ \ msg ->
         pump
   in pump
 
+opts :: ParserInfo Config 
+opts = info (config <**> helper) 
+         ( fullDesc
+         <> progDesc "mouse speed measurement tool")
+
 main :: IO ()
 main = do
-  hSetBuffering stdout LineBuffering
-  putStrLn "Hello World"
+  configs <- execParser $ opts 
 
-  finalOutVar <- atomically $ newTVar (0) :: IO (TVar Float)
-  lastRawVar  <- atomically $ newTVar (RawMouse 0 0 0) :: IO (TVar RawMouse)
+  hSetBuffering stdout NoBuffering
+
+  lastRawVar  <- atomically $ newTVar (0.0) :: IO (TVar Float)
   rawChan  <- atomically $ newTQueue :: IO (TQueue RawMouse)
 
+  let dpi = 1600
+      dpm = (fromIntegral $ cDpi configs) * 39.3701
+      mpd = 1 / dpm
+  h <- openFile (cFile configs) WriteMode
+  hSetBuffering h LineBuffering
   forkIO . forever $ do
-    (raw, last) <- atomically $ do
-      raw <- readTQueue rawChan
-      last <- swapTVar lastRawVar raw
-      return (raw, last)
-    atomically $ do
-      let speed (RawMouse x1 y1 _) (RawMouse x2 y2 _) = sqrt $ ((x2' - x1')**2) + ((y2' - y1')**2)
-            where [x1', x2', y1', y2'] = map ((*0.6299216) . fromIntegral) [x1, x2, y1, y2]
-      swapTVar finalOutVar $ speed last raw
-      return ()
-  putStrLn "Processing thread started"    
-
-  forkIO . forever $ do
-    x <- atomically $ readTVar finalOutVar
-    putStrLn (show x)
-    threadDelay (1000000)
-  putStrLn "Output Thread Started"    
+    last <- atomically $ do
+      rawLs <- flushTQueue rawChan
+      last <- readTVar lastRawVar
+      let last' = last - (cDecay configs)
+          raw = foldr (+) (L.V2 0 0) rawLs
+          last'' = if last' < 0.0 then 0.0 else last'
+          speed x = ((L.distance (L.V2 0 0) x) * mpd) * 125
+          lastFinal = max last'' $ speed $ fmap fromIntegral raw
+      writeTVar lastRawVar lastFinal
+      return lastFinal
+    printf "%2.2f m/s\r" last
+    hPrintf h "%2.2f m/s\n" last
+    hSeek h AbsoluteSeek 0
+    threadDelay 8000
 
   hWnd <- createWindow 300 400 (wndProc rawChan)
-  putStrLn "Window Created"    
   [C.block| void  {
     RAWINPUTDEVICE Rid[1];
     Rid[0].usUsagePage = 0x01; 
@@ -157,6 +185,5 @@ main = do
     Rid[0].hwndTarget = $(void *hWnd);
     RegisterRawInputDevices(Rid, 1, sizeof(Rid[0]));
   }|]
-  putStrLn "Raw device registered"
   msgPump hWnd
 
