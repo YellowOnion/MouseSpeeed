@@ -150,7 +150,7 @@ main :: IO ()
 main = do
   configs <- execParser $ opts 
 
-  hSetBuffering stdout NoBuffering
+  hSetBuffering stdout LineBuffering
 
   lastRawVar  <- atomically $ newTVar (0.0) :: IO (TVar Float)
   rawChan  <- atomically $ newTQueue :: IO (TQueue RawMouse)
@@ -172,7 +172,9 @@ main = do
       writeTVar lastRawVar lastFinal
       return lastFinal
     printf "%2.2f m/s\r" last
+    hFlush stdout
     hPrintf h "%2.2f m/s\n" last
+    hFlush h
     hSeek h AbsoluteSeek 0
     threadDelay 8000
 
