@@ -6,6 +6,8 @@ author:              "Author name here"
 maintainer:          "example@example.com"
 copyright:           "2019 Author name here"
 
+data-files: 
+  - index.html
 extra-source-files:
 - README.md
 - ChangeLog.md
@@ -28,6 +30,7 @@ executables:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
+    - -O2
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N

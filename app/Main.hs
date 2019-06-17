@@ -64,7 +64,7 @@ createWindow width height wndProc = do
     )
   w <- Graphics.Win32.createWindow
        winClass
-     "Hello, World example"
+     "MouseSpeeed"
      Graphics.Win32.wS_DISABLED
      Nothing Nothing 
      (Just width)
@@ -154,8 +154,6 @@ main = do
       mpd = 1 / dpm
       hz  = 15.625
       mcdelay = floor $ 1 / hz * 1000000
-  --h <- openFile (cFile configs) WriteMode
-  --hSetBuffering h LineBuffering
   forkIO . forever $ do
     atomically $ do
       rawLs <- flushTQueue rawChan
@@ -189,7 +187,6 @@ main = do
           return ()
 
          forever $ do 
-          -- _ <- WS.receiveData conn
           msg <- atomically $ readTChan chan
           WS.sendTextData conn $ T.pack msg
     )
