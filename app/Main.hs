@@ -20,18 +20,17 @@ import Graphics.Win32.Key
 import qualified Language.C.Inline as C
 
 import Text.Printf
+import qualified Data.Text as T
 import Options.Applicative
 import Data.Semigroup ((<>))
 
-
-flush = hFlush stdout
+import qualified Network.WebSockets as WS
 
 C.include "windows.h"
 
 data Config = Config
   { cDecay     :: Float
   , cDpi       :: Int
-  , cFile      :: FilePath
   }
 
 config :: Parser Config
@@ -39,18 +38,13 @@ config = Config
       <$> option auto
           ( long "decay"
           <> short 'c'
-          <> help "the amount in cm subtracted from the peak speed every tick" )
+          <> help "the amount in m subtracted from the peak speed every second" )
       <*> option auto
           ( long "dpi"
           <> short 'd'
           <> help "the DPI/CPI of your mouse" )
-      <*> strOption
-          ( long "output"
-          <> short 'o'
-          <> help "output file to write results to")
 
 type RawMouse = L.V2 Int
-
 
 createWindow :: Int -> Int -> Graphics.Win32.WindowClosure -> IO Graphics.Win32.HWND
 createWindow width height wndProc = do
@@ -71,13 +65,12 @@ createWindow width height wndProc = do
   w <- Graphics.Win32.createWindow
        winClass
      "Hello, World example"
-     Graphics.Win32.wS_OVERLAPPEDWINDOW
-     Nothing Nothing -- leave it to the shell to decide the position
-          -- at where to put the window initially
-                 (Just width)
+     Graphics.Win32.wS_DISABLED
+     Nothing Nothing 
+     (Just width)
      (Just height)
      (Just $ Graphics.Win32.castUINTPtrToPtr (-3)) -- message pump only. 
-     Nothing      -- no menu handle
+     Nothing
      mainInstance
      wndProc
   Graphics.Win32.showWindow w Graphics.Win32.sW_SHOWNORMAL
@@ -154,38 +147,64 @@ main = do
 
   lastRawVar  <- atomically $ newTVar (0.0) :: IO (TVar Float)
   rawChan  <- atomically $ newTQueue :: IO (TQueue RawMouse)
+  outputChan <- atomically $ newTChan :: IO (TChan String)
 
   let dpi = 1600
       dpm = (fromIntegral $ cDpi configs) * 39.3701
       mpd = 1 / dpm
-  h <- openFile (cFile configs) WriteMode
-  hSetBuffering h LineBuffering
+      hz  = 15.625
+      mcdelay = floor $ 1 / hz * 1000000
+  --h <- openFile (cFile configs) WriteMode
+  --hSetBuffering h LineBuffering
   forkIO . forever $ do
-    last <- atomically $ do
+    atomically $ do
       rawLs <- flushTQueue rawChan
       last <- readTVar lastRawVar
-      let last' = last - (cDecay configs)
+      let last' = last - ((/hz) $ cDecay configs)
           raw = foldr (+) (L.V2 0 0) rawLs
           last'' = if last' < 0.0 then 0.0 else last'
-          speed x = ((L.distance (L.V2 0 0) x) * mpd) * 125
+          speed x = ((L.distance (L.V2 0 0) x) * mpd) * hz
           lastFinal = max last'' $ speed $ fmap fromIntegral raw
       writeTVar lastRawVar lastFinal
-      return lastFinal
-    printf "%2.2f m/s\r" last
-    hFlush stdout
-    hPrintf h "%2.2f m/s\n" last
-    hFlush h
-    hSeek h AbsoluteSeek 0
-    threadDelay 8000
+      writeTChan outputChan $ printf "%2.3f m/s " lastFinal
 
-  hWnd <- createWindow 300 400 (wndProc rawChan)
-  [C.block| void  {
-    RAWINPUTDEVICE Rid[1];
-    Rid[0].usUsagePage = 0x01; 
-    Rid[0].usUsage = 0x02; 
-    Rid[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;   
-    Rid[0].hwndTarget = $(void *hWnd);
-    RegisterRawInputDevices(Rid, 1, sizeof(Rid[0]));
-  }|]
-  msgPump hWnd
+    threadDelay mcdelay
 
+  let outputThreadDispatcher f = do
+        chan <- atomically $ dupTChan outputChan
+        f chan
+      
+  mapM_ (outputThreadDispatcher) [
+    (\chan -> forkIO . forever $ do
+      x <- atomically $ readTChan chan
+      putStr $ "\r" ++ x
+      hFlush stdout
+    ),
+    (\chan ->
+      forkIO . WS.runServer ("127.0.0.1") 9160
+       $ \pending -> do
+         conn <- WS.acceptRequest pending
+         forkIO . forever $ do 
+          msg :: T.Text <- WS.receiveData conn
+          return ()
+
+         forever $ do 
+          -- _ <- WS.receiveData conn
+          msg <- atomically $ readTChan chan
+          WS.sendTextData conn $ T.pack msg
+    )
+    ]
+  
+  forkOS $ do
+    hWnd <- createWindow 300 400 (wndProc rawChan)
+    [C.block| void  {
+      RAWINPUTDEVICE Rid[1];
+      Rid[0].usUsagePage = 0x01; 
+      Rid[0].usUsage = 0x02; 
+      Rid[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;   
+      Rid[0].hwndTarget = $(void *hWnd);
+      RegisterRawInputDevices(Rid, 1, sizeof(Rid[0]));
+    }|]
+    msgPump hWnd
+  _ <- getLine
+  return ()

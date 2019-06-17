@@ -37,6 +37,8 @@ executables:
       - stm
       - linear
       - optparse-applicative
+      - websockets
+      - text
 
 tests:
   MouseSpeeed-test:

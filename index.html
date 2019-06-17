@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            body {
+                color:white;
+                font-size: 24pt;
+                font-family: consolas;
+                -webkit-text-stroke-width: 1.5px;
+                -webkit-text-stroke-color: black;
+            } 
+        </style>
+    <meta charset="utf-8">
+    <script>
+        window.onload = function () {
+            ws = new WebSocket("ws://localhost:9160");
+            msg = document.getElementById("msg");
+
+            ws.onmessage = function(event) {
+                console.log(event.data);
+                msg.innerHTML = event.data;
+            };
+        };
+    </script>
+    </head>
+<body><p id="msg"> hello world </p></body>
+</html>
