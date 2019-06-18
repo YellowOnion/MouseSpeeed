@@ -6,6 +6,7 @@ import qualified Graphics.Win32
 import System.Win32.DLL (getModuleHandle)
 import Control.Exception (SomeException, catch)
 import Control.Monad
+import Control.Monad.Loops
 import Control.Concurrent
 import Control.Concurrent.STM
 import System.Exit (ExitCode(ExitSuccess), exitWith)
@@ -118,7 +119,7 @@ wndProc rawChan hwnd wmsg wParam lParam
         |]
         x' <- peek x
         y' <- peek y
-        atomically $ writeTQueue rawChan $ L.V2 (fromIntegral x') (fromIntegral y')
+        atomically $ writeTQueue rawChan $! L.V2 (fromIntegral x') (fromIntegral y')
     return 0
 
  | otherwise = Graphics.Win32.defWindowProc (Just hwnd) wmsg wParam lParam
@@ -139,6 +140,26 @@ opts = info (config <**> helper)
          ( fullDesc
          <> progDesc "mouse speed measurement tool")
 
+rMProcessingLoop (Config decay dpi) lastRawVar rawChan outputChan = do
+  atomically $ do
+    rawLs <- unfoldM $ tryReadTQueue rawChan
+    last <- readTVar lastRawVar
+
+    let last' = last - ((/hz) $ decay)
+        raw = foldr (+) (L.V2 0 0) rawLs
+        last'' = if last' < 0.0 then 0.0 else last'
+        lastFinal = max last'' $ speed $ fmap fromIntegral raw
+    writeTVar lastRawVar $! lastFinal
+    writeTChan outputChan $! printf "%2.3f m/s " lastFinal
+
+  threadDelay mcdelay
+  where 
+    speed x = ((L.distance (L.V2 0 0) x) * mpd) * hz
+    dpm = (fromIntegral $ dpi) * 39.3701
+    mpd = 1 / dpm
+    hz  = 15.625
+    mcdelay = floor $ 1 / hz * 1000000
+
 main :: IO ()
 main = do
   configs <- execParser $ opts 
@@ -147,50 +168,39 @@ main = do
 
   lastRawVar  <- atomically $ newTVar (0.0) :: IO (TVar Float)
   rawChan  <- atomically $ newTQueue :: IO (TQueue RawMouse)
-  outputChan <- atomically $ newTChan :: IO (TChan String)
+  outputChan <- atomically $ newBroadcastTChan :: IO (TChan String)
 
-  let dpi = 1600
-      dpm = (fromIntegral $ cDpi configs) * 39.3701
-      mpd = 1 / dpm
-      hz  = 15.625
-      mcdelay = floor $ 1 / hz * 1000000
-  forkIO . forever $ do
-    atomically $ do
-      rawLs <- flushTQueue rawChan
-      last <- readTVar lastRawVar
-      let last' = last - ((/hz) $ cDecay configs)
-          raw = foldr (+) (L.V2 0 0) rawLs
-          last'' = if last' < 0.0 then 0.0 else last'
-          speed x = ((L.distance (L.V2 0 0) x) * mpd) * hz
-          lastFinal = max last'' $ speed $ fmap fromIntegral raw
-      writeTVar lastRawVar lastFinal
-      writeTChan outputChan $ printf "%2.3f m/s " lastFinal
 
-    threadDelay mcdelay
+  
+  forkIO . forever $ rMProcessingLoop configs lastRawVar rawChan outputChan
 
-  let outputThreadDispatcher f = do
-        chan <- atomically $ dupTChan outputChan
-        f chan
+  --let outputThreadDispatcher f = do
+  --      chan <- atomically $ dupTChan outputChan
+  --      f chan
       
-  mapM_ (outputThreadDispatcher) [
-    (\chan -> forkIO . forever $ do
-      x <- atomically $ readTChan chan
+  --mapM_ (outputThreadDispatcher) [
+   -- (\chan -> forkIO . forever $ do
+  chan1 <- atomically $ dupTChan outputChan
+  forkIO . forever $ do
+      x <- atomically $ readTChan chan1
       putStr $ "\r" ++ x
       hFlush stdout
-    ),
-    (\chan ->
-      forkIO . WS.runServer ("127.0.0.1") 9160
-       $ \pending -> do
-         conn <- WS.acceptRequest pending
-         forkIO . forever $ do 
+  --  ),
+  --  (\chan ->
+  forkIO . WS.runServer ("127.0.0.1") 9160
+    $ \pending -> do
+        conn <- WS.acceptRequest pending
+
+        chan <- atomically $ dupTChan outputChan
+        forkIO . forever $ do 
           msg :: T.Text <- WS.receiveData conn
           return ()
 
-         forever $ do 
+        forever $ do 
           msg <- atomically $ readTChan chan
           WS.sendTextData conn $ T.pack msg
-    )
-    ]
+  --  )
+  --  ]
   
   forkOS $ do
     hWnd <- createWindow 300 400 (wndProc rawChan)
