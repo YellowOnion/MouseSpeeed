@@ -34,7 +34,6 @@ executables:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
-    - -fprof-auto
     dependencies:
       - Win32
       - inline-c
