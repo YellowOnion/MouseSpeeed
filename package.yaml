@@ -34,6 +34,7 @@ executables:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -fprof-auto
     dependencies:
       - Win32
       - inline-c
@@ -42,6 +43,7 @@ executables:
       - optparse-applicative
       - websockets
       - text
+      - monad-loops
 
 tests:
   MouseSpeeed-test:
